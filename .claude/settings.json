@@ -1,0 +1,8 @@
+{
+  "enabledPlugins": {
+    "ponytail@ponytail": true,
+    "code-review@claude-plugins-official": true,
+    "claude-mem@thedotmack": true,
+    "obsidian-second-brain@obsidian-second-brain": true
+  }
+}
