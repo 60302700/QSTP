@@ -1,0 +1,47 @@
+services:
+  openwa:
+    build:
+      context: ./openwa
+      dockerfile: Dockerfile
+    container_name: larus-openwa
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:2785:2785"
+    environment:
+      PORT: 2785
+      NODE_ENV: development
+      AUTO_START_SESSIONS: "true"
+      DATABASE_TYPE: sqlite
+      DATABASE_SYNCHRONIZE: "true"
+      ENGINE_TYPE: whatsapp-web.js
+      SESSION_DATA_PATH: /app/data/sessions
+      PUPPETEER_HEADLESS: "true"
+      PUPPETEER_ARGS: >-
+        --no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: /app/data/media
+      PLUGINS_DIR: /app/data/plugins
+      WEBHOOK_TIMEOUT: 10000
+      WEBHOOK_RETRY_DELAY: 5000
+      WEBHOOK_DISPATCH_CONCURRENCY: 16
+      WEBHOOK_DISPATCH_MAX_QUEUED: 1000
+      RATE_LIMIT_SHORT_TTL: 60000
+      RATE_LIMIT_SHORT_LIMIT: 20
+      RATE_LIMIT_MEDIUM_TTL: 300000
+      RATE_LIMIT_MEDIUM_LIMIT: 100
+      RATE_LIMIT_LONG_TTL: 3600000
+      RATE_LIMIT_LONG_LIMIT: 1000
+      BODY_SIZE_LIMIT: 25mb
+      TRUSTED_PROXIES: ""
+      API_MASTER_KEY: larus-openwa-dev
+    volumes:
+      - openwa-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2785/api/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  openwa-data:

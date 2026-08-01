@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 import persistance
 import resend_mail
+import whatsapp_message
 
 load_dotenv(Path(__file__).resolve().parent / '.env')
 
@@ -36,9 +37,10 @@ class DuplicateError(Exception):
 VALID_CANDIDATE_STATUSES   = {'pending', 'accepted', 'rejected'}
 VALID_INTERVIEW_STATUSES   = {'scheduled', 'completed', 'cancelled'}
 VALID_INTERVIEW_OUTCOMES   = {'passed', 'failed', 'pending'}
-VALID_SHORTLISTED_STATUSES = {'pending', 'invited', 'confirmed', 'declined', 'disabled'}
+VALID_SHORTLISTED_STATUSES = {'pending', 'claimed', 'invited', 'confirmed', 'declined', 'disabled', 'conflicted'}
 
 DISABLE_CYCLE_DAYS = 90  # ~3 months cooldown after "already employed"
+REMINDER_COOLDOWN_HOURS = 24  # don't re-alert the same open task more than once a day
 
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
@@ -68,24 +70,125 @@ def _send_email(to: str, subject: str, html: str):
     resend_mail.send_email(to, subject, html)
 
 
+def _send_shortlist_notifications(shortlisted: dict):
+    """Notify the candidate they were shortlisted. Startup is notified separately via session link."""
+    candidate_name = shortlisted.get('name', '')
+    startup_name = shortlisted.get('startup', '')
+    job_title = shortlisted.get('job_title') or 'the role'
+    candidate_email = shortlisted.get('email')
+    startup_email = shortlisted.get('startup_email')
+    candidate_phone = shortlisted.get('phone')
+
+    shortlist_id = shortlisted.get('_id') or shortlisted.get('shortlist_id')
+    checking_url = shortlisted.get('checking_url')
+    if not checking_url and shortlist_id:
+        checking_url = f"{BASE_URL}/verify/{shortlist_id}"
+    if not checking_url:
+        checking_url = f"{BASE_URL}/verify/placeholder"
+
+    if candidate_email:
+        resend_mail.ShortlistToCandidateMail(
+            candidate_email,
+            candidate_name,
+            job_title,
+            startup_name,
+            startup_email or 'onboarding@resend.dev',
+            checking_url,
+        )
+
+    if candidate_phone:
+        whatsapp_message.ShortlistToCandidateMessage(
+            candidate_phone,
+            candidate_name,
+            job_title,
+            startup_name,
+            checking_url,
+        )
+
+
+def _claim_shortlisted_for_startup(shortlisted_id: str, startup_name: str, startup_email: str):
+    """Reserve a shortlisted candidate for one startup, preventing later collisions."""
+    if not persistance.claim_shortlisted(shortlisted_id, startup_name, startup_email):
+        entry = persistance.get_shortlisted(shortlisted_id)
+        if entry and entry.get('status') in {'claimed', 'confirmed', 'invited', 'disabled', 'declined', 'conflicted'}:
+            owner = entry.get('claimed_by') or entry.get('conflicted_by') or entry.get('startup')
+            raise ValidationError(f"This candidate is already taken by {owner}.")
+        raise ValidationError("This candidate is already taken by another startup.")
+    return True
+
+
 def _email_acceptance(candidate: dict):
-    _send_email(
-        candidate['email'],
-        f"You're in! Offer from {candidate.get('startup', '')}",
-        f"<p>Hi {candidate.get('name', '')},</p>"
-        f"<p>Congratulations — you've been accepted for the position at {candidate.get('startup', '')}.</p>"
-        f"<p>Your contract and onboarding details will follow shortly.</p>",
-    )
+    candidate_email = candidate.get('email')
+    startup_name = candidate.get('startup', '')
+    if candidate_email:
+        resend_mail.CandidateAcceptedMail(candidate_email, candidate.get('name', ''), startup_name)
+        resend_mail.CandidateContractMail(
+            candidate_email, candidate.get('name', ''), startup_name, candidate.get('job_title')
+        )
+    startup_email = candidate.get('startup_email')
+    if startup_email:
+        resend_mail.StartupOwnerInterviewMail(startup_email, candidate.get('name', ''), startup_name, f"{BASE_URL}/admin")
 
 
 def _email_rejection(candidate: dict):
-    _send_email(
-        candidate['email'],
-        f"Update on your application to {candidate.get('startup', '')}",
-        f"<p>Hi {candidate.get('name', '')},</p>"
-        f"<p>Thank you for your time — we've decided not to move forward at this stage.</p>"
-        f"<p>We wish you the best in your search.</p>",
+    candidate_email = candidate.get('email')
+    startup_name = candidate.get('startup', '')
+    if candidate_email:
+        resend_mail.CandidateRejectedMail(candidate_email, candidate.get('name', ''), startup_name)
+
+
+def _email_interview_scheduled(candidate: dict, interview: dict):
+    candidate_email = candidate.get('email')
+    if candidate_email:
+        resend_mail.CandidateInterviewScheduledMail(
+            candidate_email,
+            candidate.get('name', ''),
+            candidate.get('startup', ''),
+            interview.get('date', ''),
+            interview.get('time'),
+            interview.get('location'),
+            interview.get('notes'),
+        )
+    candidate_phone = candidate.get('phone')
+    if candidate_phone:
+        whatsapp_message.InterviewScheduledToCandidateMessage(
+            candidate_phone,
+            candidate.get('name', ''),
+            candidate.get('startup', ''),
+            interview.get('date', ''),
+            interview.get('time'),
+            interview.get('location'),
+        )
+
+
+def _notify_startup_candidate_confirmed(candidate_id: str):
+    """Email the startup a link to schedule interview, instant onboard, or reject."""
+    candidate = get_candidate(candidate_id)
+    startup_email = candidate.get('startup_email')
+    token = persistance.create_action_session(
+        candidate_id, candidate.get('startup', ''), startup_email or ''
     )
+    action_url = f"{BASE_URL}/action/{token}/page"
+
+    if startup_email:
+        resend_mail.StartupCandidateConfirmedMail(
+            startup_email,
+            candidate.get('name', ''),
+            candidate.get('startup', ''),
+            candidate.get('job_title'),
+            action_url,
+        )
+
+    startup_phone = candidate.get('startup_phone')
+    if startup_phone:
+        whatsapp_message.CandidateConfirmedToStartupMessage(
+            startup_phone,
+            candidate.get('startup', ''),
+            candidate.get('name', ''),
+            action_url,
+        )
+
+    return action_url
 
 
 # ==============================================================================
@@ -285,10 +388,20 @@ def update_interview_status(interview_id: str, status: str):
 
 
 def update_interview_outcome(interview_id: str, outcome: str):
-    """Record the outcome of a completed interview."""
+    """Record the outcome of a completed interview and accept/reject the candidate."""
     _validate_id(interview_id, 'Interview')
     _validate_status(outcome, VALID_INTERVIEW_OUTCOMES, 'Interview outcome')
-    return persistance.update_interview_outcome(interview_id, outcome)
+
+    interview = get_interview(interview_id)
+    result = persistance.update_interview_outcome(interview_id, outcome)
+
+    candidate_id = interview.get('candidate_id')
+    if outcome == 'passed' and candidate_id:
+        accept_candidate(candidate_id)
+    elif outcome == 'failed' and candidate_id:
+        reject_candidate(candidate_id)
+
+    return result
 
 
 def remove_interview(interview_id: str):
@@ -326,7 +439,11 @@ def add_shortlisted(shortlisted: dict):
     shortlisted['email']   = shortlisted['email'].strip().lower()
     shortlisted['startup'] = shortlisted['startup'].strip()
 
-    return persistance.add_shortlisted(shortlisted)
+    shortlisted_id = persistance.add_shortlisted(shortlisted)
+    shortlisted['_id'] = str(shortlisted_id)
+    shortlisted['shortlist_id'] = str(shortlisted_id)
+    _send_shortlist_notifications(shortlisted)
+    return shortlisted_id
 
 
 def get_shortlisted(shortlisted_id: str):
@@ -442,7 +559,10 @@ def schedule_interview_for_candidate(candidate_id: str, interview_details: dict)
     if candidate.get('status') == 'rejected':
         raise ValidationError(f"Candidate '{candidate_id}' has been rejected and cannot be interviewed.")
 
-    return persistance.schedule_interview_for_candidate(candidate_id, interview_details)
+    interview_id = persistance.schedule_interview_for_candidate(candidate_id, interview_details)
+    interview = get_interview(str(interview_id))
+    _email_interview_scheduled(candidate, interview)
+    return interview_id
 
 
 def accept_candidate(candidate_id: str):
@@ -497,6 +617,50 @@ def instant_onboard_candidate(candidate_id: str):
 def get_pipeline_summary():
     """Return a count summary across all pipeline stages."""
     return persistance.get_pipeline_summary()
+
+
+def get_candidate_progress(candidate_id: str):
+    """Full picture of one candidate: profile, shortlist bio (major/university/linkedin/cv), and interview history."""
+    candidate = get_candidate(candidate_id)     # raises NotFoundError if missing
+    shortlisted = persistance.get_shortlisted(candidate['shortlist_id']) if candidate.get('shortlist_id') else None
+    interviews = persistance.get_interviews_by_candidate(candidate_id)
+    return {'candidate': candidate, 'shortlisted': shortlisted, 'interviews': interviews}
+
+
+def get_all_startups():
+    """Distinct startup names seen so far (every startup enters via a shortlist)."""
+    return sorted({entry['startup'] for entry in persistance.get_all_shortlisted() if entry.get('startup')})
+
+
+def get_startup_summary(startup_name: str):
+    """Everything tracked for one startup: shortlist, candidates (interns), interviews, and roll-up counts."""
+    if not startup_name or not startup_name.strip():
+        raise ValidationError("Startup name must not be empty.")
+    startup_name = startup_name.strip()
+
+    shortlisted = get_shortlisted_by_startup(startup_name)
+    candidates = get_candidates_by_startup(startup_name)
+    interviews = get_interviews_by_startup(startup_name)
+
+    counts = {
+        'shortlisted_total':    len(shortlisted),
+        'shortlisted_pending':  sum(1 for s in shortlisted if s.get('status') == 'pending'),
+        'candidates_total':     len(candidates),
+        'candidates_pending':   sum(1 for c in candidates if c.get('status') == 'pending'),
+        'candidates_accepted':  sum(1 for c in candidates if c.get('status') == 'accepted'),
+        'candidates_rejected':  sum(1 for c in candidates if c.get('status') == 'rejected'),
+        'interviews_total':     len(interviews),
+        'interviews_scheduled': sum(1 for i in interviews if i.get('status') == 'scheduled'),
+        'interviews_completed': sum(1 for i in interviews if i.get('status') == 'completed'),
+    }
+
+    return {
+        'startup': startup_name,
+        'counts': counts,
+        'shortlisted': shortlisted,
+        'candidates': candidates,
+        'interviews': interviews,
+    }
 
 
 # ==============================================================================
@@ -559,7 +723,8 @@ def submit_verification(token: str, already_employed: bool, down_for_position: b
     if down_for_position:
         persistance.update_verification(token, {'status': 'accepted', 'responded_at': datetime.utcnow()})
         candidate_id = shortlist_to_candidate(shortlisted_id)
-        return {'result': 'accepted', 'candidate_id': candidate_id}
+        action_url = _notify_startup_candidate_confirmed(str(candidate_id))
+        return {'result': 'accepted', 'candidate_id': str(candidate_id), 'action_url': action_url}
 
     persistance.update_verification(token, {'status': 'declined', 'responded_at': datetime.utcnow()})
     update_shortlisted_status(shortlisted_id, 'declined')
@@ -592,6 +757,16 @@ def create_selection_session(startup: str, startup_email: str):
         f"<p>Select who to invite from your shortlist:</p>"
         f'<p><a href="{BASE_URL}/session/{token}/page">{BASE_URL}/session/{token}/page</a></p>',
     )
+
+    startup_phone = None
+    try:
+        startup_phone = persistance.get_shortlisted_by_startup(startup)[0].get('startup_phone') if persistance.get_shortlisted_by_startup(startup) else None
+    except Exception:
+        startup_phone = None
+
+    if startup_phone:
+        whatsapp_message.ReviewShortlistToStartupMessage(startup_phone, startup, f"{BASE_URL}/session/{token}/page")
+
     return token
 
 
@@ -622,7 +797,7 @@ def set_selection(token: str, shortlisted_id: str, selected: bool):
 
 
 def submit_selection_session(token: str):
-    """Finalize a session: send verification invites to every selected candidate."""
+    """Finalize a session: reserve each selected candidate for the startup, then send verification invites."""
     session = persistance.get_session(token)
     if not session:
         raise NotFoundError(f"Session '{token}' not found.")
@@ -633,5 +808,172 @@ def submit_selection_session(token: str):
     if not selected_ids:
         raise ValidationError("No candidates selected in this session.")
 
+    for shortlisted_id in selected_ids:
+        entry = persistance.get_shortlisted(shortlisted_id)
+        if not entry:
+            raise NotFoundError(f"Shortlisted entry '{shortlisted_id}' not found.")
+        if entry.get('status') not in {'pending', 'claimed'}:
+            owner = entry.get('claimed_by') or entry.get('conflicted_by') or entry.get('startup')
+            raise ValidationError(f"Candidate '{entry.get('name')}' is already taken by {owner}.")
+        _claim_shortlisted_for_startup(shortlisted_id, session['startup'], session['startup_email'])
+
     persistance.update_session(token, {'status': 'submitted', 'submitted_at': datetime.utcnow()})
     return [invite_for_verification(sid) for sid in selected_ids]
+
+
+# ==============================================================================
+# Startup Action Sessions – interview / instant onboard / reject after confirmation
+# ==============================================================================
+
+def get_action_session(token: str):
+    """Fetch an action session with candidate and interview details attached."""
+    session = persistance.get_action_session(token)
+    if not session:
+        raise NotFoundError(f"Action session '{token}' not found.")
+
+    candidate = persistance.get_candidate(session['candidate_id'])
+    session['candidate'] = candidate
+    if session.get('interview_id'):
+        session['interview'] = persistance.get_interview(session['interview_id'])
+    return session
+
+
+def _require_open_action_session(token: str):
+    session = persistance.get_action_session(token)
+    if not session:
+        raise NotFoundError(f"Action session '{token}' not found.")
+    if session['status'] == 'completed':
+        raise ValidationError("This action has already been completed.")
+    return session
+
+
+def action_schedule_interview(token: str, interview_details: dict):
+    """Startup schedules an interview via the action session link."""
+    session = _require_open_action_session(token)
+    if session['status'] == 'interview_scheduled':
+        raise ValidationError("An interview has already been scheduled for this candidate.")
+
+    _require(['date'], interview_details, 'Interview details')
+    candidate_id = session['candidate_id']
+    interview_id = schedule_interview_for_candidate(candidate_id, interview_details)
+
+    persistance.update_action_session(token, {
+        'status': 'interview_scheduled',
+        'interview_id': str(interview_id),
+    })
+    return str(interview_id)
+
+
+def action_instant_onboard(token: str):
+    """Startup skips interview and instantly onboards the candidate."""
+    session = _require_open_action_session(token)
+    candidate_id = session['candidate_id']
+    result = instant_onboard_candidate(candidate_id)
+    persistance.update_action_session(token, {'status': 'completed', 'completed_at': datetime.utcnow()})
+    return result
+
+
+def action_reject(token: str):
+    """Startup declines the candidate."""
+    session = _require_open_action_session(token)
+    candidate_id = session['candidate_id']
+    result = reject_candidate(candidate_id)
+    persistance.update_action_session(token, {'status': 'completed', 'completed_at': datetime.utcnow()})
+    return result
+
+
+def action_interview_outcome(token: str, outcome: str):
+    """Startup records interview outcome (passed/failed) and triggers accept/reject."""
+    session = persistance.get_action_session(token)
+    if not session:
+        raise NotFoundError(f"Action session '{token}' not found.")
+    if session['status'] != 'interview_scheduled':
+        raise ValidationError("No interview has been scheduled for this candidate yet.")
+    if session['status'] == 'completed':
+        raise ValidationError("This action has already been completed.")
+
+    interview_id = session.get('interview_id')
+    if not interview_id:
+        raise ValidationError("No interview linked to this action session.")
+
+    result = update_interview_outcome(interview_id, outcome)
+    persistance.update_action_session(token, {'status': 'completed', 'completed_at': datetime.utcnow()})
+    return result
+
+
+# ==============================================================================
+# Pending-task Alerts – reminds whoever's turn it is, garbage-collects done ones
+# ==============================================================================
+
+def _due_for_reminder(entity: dict, now: datetime) -> bool:
+    """True if this entity has never been reminded, or its last reminder is stale."""
+    last = entity.get('last_reminded_at')
+    return not last or (now - last) > timedelta(hours=REMINDER_COOLDOWN_HOURS)
+
+
+def check_pending_and_alert():
+    """
+    Sweep every open workflow token (selection session, verification, action session):
+    - still open and due -> email whoever needs to act next
+    - already resolved   -> delete it, its job is done
+
+    Meant to be called periodically (see presentation.py's background loop) or on
+    demand via POST /admin/check-pending. Returns a summary of what happened.
+    """
+    now = datetime.utcnow()
+    reminded = {'sessions': 0, 'verifications': 0, 'action_sessions': 0}
+
+    for session in persistance.get_open_sessions():
+        if not _due_for_reminder(session, now):
+            continue
+        _send_email(
+            session['startup_email'],
+            f"Reminder: candidates waiting for your review — {session['startup']}",
+            f"<p>Hi,</p><p>You still have shortlisted candidates to review for {session['startup']}.</p>"
+            f'<p><a href="{BASE_URL}/session/{session["token"]}/page">{BASE_URL}/session/{session["token"]}/page</a></p>',
+        )
+        persistance.update_session(session['token'], {'last_reminded_at': now})
+        reminded['sessions'] += 1
+
+    for verification in persistance.get_pending_verifications():
+        if not _due_for_reminder(verification, now):
+            continue
+        shortlisted = persistance.get_shortlisted(verification['shortlisted_id'])
+        if shortlisted:
+            _send_email(
+                shortlisted['email'],
+                f"Reminder: confirm your interest — {shortlisted.get('startup', '')}",
+                f"<p>Hi {shortlisted.get('name', '')},</p>"
+                f"<p>We're still waiting on your reply for the {shortlisted.get('startup', '')} position.</p>"
+                f'<p><a href="{BASE_URL}/verify/{verification["token"]}">{BASE_URL}/verify/{verification["token"]}</a></p>',
+            )
+        persistance.update_verification(verification['token'], {'last_reminded_at': now})
+        reminded['verifications'] += 1
+
+    for action in persistance.get_open_action_sessions():
+        if not _due_for_reminder(action, now):
+            continue
+        candidate = persistance.get_candidate(action['candidate_id']) or {}
+        action_url = f"{BASE_URL}/action/{action['token']}/page"
+        if action['status'] == 'interview_scheduled':
+            subject = f"Reminder: record interview outcome for {candidate.get('name', '')}"
+            message = "Please record the interview outcome so we can notify the candidate."
+        else:
+            subject = f"Reminder: {candidate.get('name', '')} is waiting on you"
+            message = "Please choose: schedule an interview, instant onboard, or decline."
+        _send_email(
+            action['startup_email'],
+            subject,
+            f"<p>Hi,</p><p>{message}</p>"
+            f'<p><a href="{action_url}">{action_url}</a></p>',
+        )
+        persistance.update_action_session(action['token'], {'last_reminded_at': now})
+        reminded['action_sessions'] += 1
+
+    cleaned = {
+        'sessions':        persistance.remove_resolved_sessions(),
+        'verifications':   persistance.remove_resolved_verifications(),
+        'action_sessions': persistance.remove_completed_action_sessions(),
+    }
+
+    return {'reminded': reminded, 'cleaned': cleaned}

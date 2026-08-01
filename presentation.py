@@ -1,3 +1,5 @@
+import asyncio
+import os
 from pathlib import Path
 
 from bson import ObjectId
@@ -10,14 +12,36 @@ app = FastAPI()
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
+PENDING_CHECK_INTERVAL_SECONDS = int(os.environ.get("PENDING_CHECK_INTERVAL_SECONDS", 3600))
+
+
+@app.on_event("startup")
+async def _start_pending_checker():
+    """Background loop: sweeps for pending tasks right away, then every interval — fully automatic, no manual trigger needed."""
+    async def loop():
+        while True:
+            try:
+                await asyncio.to_thread(business.check_pending_and_alert)
+            except Exception as e:
+                print(f"[pending-checker] sweep failed: {e}")
+            await asyncio.sleep(PENDING_CHECK_INTERVAL_SECONDS)
+    asyncio.create_task(loop())
+
 class Candidate(BaseModel):
     name: str
     age: int
     email: str
     cv: str
+    phone: str | None = None
+    major: str | None = None
+    university: str | None = None
+    linkedin: str | None = None
+    job_title: str | None = None
+    checking_url: str | None = None
 
 class StartupGroup(BaseModel):
     email: str
+    phone: str | None = None
     candidates: list[Candidate]
 
 class VerificationReply(BaseModel):
@@ -45,6 +69,32 @@ def _jsonable(value):
     return value
 
 
+def _coerce_startup_group(info):
+    if isinstance(info, StartupGroup):
+        return info
+    if isinstance(info, dict):
+        candidates = []
+        for candidate in info.get("candidates", []):
+            if isinstance(candidate, Candidate):
+                candidates.append(candidate)
+            else:
+                candidates.append(Candidate(**candidate))
+        return StartupGroup(
+            email=info.get("email", ""),
+            phone=info.get("phone"),
+            candidates=candidates,
+        )
+    raise TypeError(f"Unsupported startup payload: {type(info).__name__}")
+
+
+def _candidate_record(candidate):
+    if isinstance(candidate, Candidate):
+        return candidate.model_dump()
+    if isinstance(candidate, dict):
+        return dict(candidate)
+    raise TypeError(f"Unsupported candidate payload: {type(candidate).__name__}")
+
+
 def _handle(fn, *args, **kwargs):
     try:
         return _jsonable(fn(*args, **kwargs))
@@ -68,10 +118,13 @@ def dataentry(data: list[dict[str, StartupGroup]]):
     startup_emails = {}
     for group in data:
         for startup, info in group.items():
-            startup_emails[startup] = info.email
-            for candidate in info.candidates:
-                record = candidate.model_dump()
+            startup_group = _coerce_startup_group(info)
+            startup_emails[startup] = startup_group.email
+            for candidate in startup_group.candidates:
+                record = _candidate_record(candidate)
                 record["startup"] = startup
+                record["startup_email"] = startup_group.email
+                record["startup_phone"] = startup_group.phone
                 shortlisted_id = _handle(business.add_shortlisted, record)
                 shortlisted.append({"email": record["email"], "startup": startup, "id": str(shortlisted_id)})
 
@@ -167,3 +220,86 @@ def accept_candidate_endpoint(candidate_id: str):
 def reject_candidate_endpoint(candidate_id: str):
     """Marks rejected and emails the rejection follow-up."""
     return {"modified": _handle(business.reject_candidate, candidate_id)}
+
+
+# ==============================================================================
+# Startup action sessions – schedule interview / instant onboard / reject
+# ==============================================================================
+
+@app.get("/action/{token}")
+def view_action_session(token: str):
+    return _handle(business.get_action_session, token)
+
+
+@app.get("/action/{token}/page", response_class=HTMLResponse)
+def action_page(token: str):
+    """Startup page: schedule interview, instant onboard, or decline."""
+    return (TEMPLATES_DIR / "action.html").read_text()
+
+
+@app.post("/action/{token}/interview")
+def action_schedule_interview(token: str, details: InterviewDetails):
+    interview_details = {k: v for k, v in details.model_dump().items() if v is not None}
+    interview_id = _handle(business.action_schedule_interview, token, interview_details)
+    return {"interview_id": interview_id}
+
+
+@app.post("/action/{token}/instant-onboard")
+def action_instant_onboard(token: str):
+    return {"modified": _handle(business.action_instant_onboard, token)}
+
+
+@app.post("/action/{token}/reject")
+def action_reject(token: str):
+    return {"modified": _handle(business.action_reject, token)}
+
+
+@app.post("/action/{token}/outcome")
+def action_interview_outcome(token: str, body: InterviewOutcome):
+    return {"modified": _handle(business.action_interview_outcome, token, body.outcome)}
+
+
+# ==============================================================================
+# Admin dashboard – overview + candidate lookup for the middleman
+# ==============================================================================
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page():
+    return (TEMPLATES_DIR / "admin.html").read_text()
+
+
+@app.get("/admin/summary")
+def admin_summary():
+    return _handle(business.get_pipeline_summary)
+
+
+@app.get("/admin/candidates")
+def admin_candidates():
+    return _handle(business.get_all_candidates)
+
+
+@app.get("/admin/candidates/{candidate_id}")
+def admin_candidate_detail(candidate_id: str):
+    """Full picture of one candidate: profile, shortlist bio, and interview history."""
+    return _handle(business.get_candidate_progress, candidate_id)
+
+
+@app.get("/admin/startups")
+def admin_startups():
+    return _handle(business.get_all_startups)
+
+
+@app.get("/admin/startups/{startup}")
+def admin_startup_detail(startup: str):
+    """Everything tracked for one startup: shortlist, interns/candidates, interviews, and counts."""
+    return _handle(business.get_startup_summary, startup)
+
+
+@app.post("/admin/check-pending")
+def admin_check_pending():
+    """
+    Manually trigger the pending-task reminder sweep: emails whoever needs to act
+    on each open session/verification/action, and deletes tokens already resolved.
+    Also runs automatically every PENDING_CHECK_INTERVAL_SECONDS (default 1h).
+    """
+    return _handle(business.check_pending_and_alert)

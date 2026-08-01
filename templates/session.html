@@ -1,89 +1,206 @@
 <!doctype html>
 <html>
-<head>
-<meta charset="utf-8">
-<title>Review Shortlist</title>
-<script src="https://cdn.jsdelivr.net/npm/handlebars@4.7.8/dist/handlebars.min.js"></script>
-<style>
-  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-  h1 { font-size: 1.4rem; }
-  .candidate { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0; border-bottom: 1px solid #eee; }
-  .candidate input { width: 1.1rem; height: 1.1rem; }
-  #status { margin: 1rem 0; color: #555; }
-  button { padding: 0.6rem 1.2rem; font-size: 1rem; cursor: pointer; }
-  button:disabled { cursor: not-allowed; opacity: 0.6; }
-</style>
-</head>
-<body>
-<h1>Shortlist for <span id="startup-name">...</span></h1>
-<div id="status"></div>
-<div id="candidate-list">Loading…</div>
-<button id="submit-btn">Send Invites to Selected</button>
-
-<script id="candidate-template" type="text/x-handlebars-template">
-{{#each candidates}}
-<label class="candidate">
-  <input type="checkbox" class="cand-checkbox" data-id="{{this._id}}" {{#if this.selected}}checked{{/if}}>
-  <span>{{this.name}} — {{this.email}}</span>
-</label>
-{{else}}
-<p>No candidates in this session.</p>
-{{/each}}
-</script>
-
-<script>
-const token = window.location.pathname.split('/').filter(Boolean)[1];
-const template = Handlebars.compile(document.getElementById('candidate-template').innerHTML);
-const statusEl = document.getElementById('status');
-const submitBtn = document.getElementById('submit-btn');
-
-async function loadSession() {
-  const res = await fetch(`/session/${token}`);
-  const session = await res.json();
-  if (!res.ok) {
-    statusEl.textContent = session.detail || 'Session not found.';
-    document.getElementById('candidate-list').innerHTML = '';
-    submitBtn.disabled = true;
-    return;
-  }
-
-  document.getElementById('startup-name').textContent = session.startup;
-  const selectedSet = new Set(session.selected_ids);
-  const candidates = session.candidates.map(c => ({ ...c, selected: selectedSet.has(c._id) }));
-  document.getElementById('candidate-list').innerHTML = template({ candidates });
-
-  document.querySelectorAll('.cand-checkbox').forEach(cb => {
-    cb.addEventListener('change', async (e) => {
-      const id = e.target.dataset.id;
-      const action = e.target.checked ? 'select' : 'deselect';
-      const r = await fetch(`/session/${token}/${action}/${id}`, { method: 'POST' });
-      if (!r.ok) {
-        const err = await r.json();
-        statusEl.textContent = err.detail || 'Could not update selection.';
-        e.target.checked = !e.target.checked;
+  <head>
+    <meta charset="utf-8" />
+    <title>Review Shortlist</title>
+    <script src="https://cdn.jsdelivr.net/npm/handlebars@4.7.8/dist/handlebars.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --card: #ffffff;
+        --text: #172033;
+        --muted: #6b7280;
+        --border: #e5e7eb;
+        --accent: #2563eb;
+        --accent-strong: #1d4ed8;
+        --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
       }
-    });
-  });
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: Inter, "Segoe UI", system-ui, sans-serif;
+        margin: 0;
+        padding: 2rem 1rem 3rem;
+        background: linear-gradient(135deg, #f8fbff 0%, var(--bg) 100%);
+        color: var(--text);
+      }
+      .container {
+        max-width: 900px;
+        margin: 0 auto;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        box-shadow: var(--shadow);
+        padding: 1.4rem;
+      }
+      h1 {
+        font-size: 1.35rem;
+        margin: 0 0 0.4rem;
+      }
+      .subtitle {
+        color: var(--muted);
+        margin-bottom: 1rem;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 0.8rem 0 1rem;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 0.7rem 0.7rem;
+        border-bottom: 1px solid var(--border);
+        font-size: 0.92rem;
+      }
+      th {
+        color: var(--muted);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        font-size: 0.75rem;
+      }
+      #status {
+        margin: 0.6rem 0 0.8rem;
+        color: var(--muted);
+      }
+      button {
+        padding: 0.75rem 1.1rem;
+        font-size: 1rem;
+        cursor: pointer;
+        border: none;
+        border-radius: 999px;
+        background: linear-gradient(
+          120deg,
+          var(--accent) 0%,
+          var(--accent-strong) 100%
+        );
+        color: white;
+        box-shadow: 0 8px 18px rgba(37, 99, 235, 0.2);
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
+        box-shadow: none;
+      }
+      a {
+        color: var(--accent);
+      }
+      input[type="checkbox"] {
+        width: 1rem;
+        height: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Shortlist for <span id="startup-name">...</span></h1>
+      <div class="subtitle">
+        Review the shortlisted candidates and choose who to invite.
+      </div>
+      <div id="status"></div>
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Major</th>
+            <th>University</th>
+            <th>LinkedIn</th>
+            <th>CV</th>
+          </tr>
+        </thead>
+        <tbody id="candidate-list">
+          <tr>
+            <td colspan="7">Loading…</td>
+          </tr>
+        </tbody>
+      </table>
+      <button id="submit-btn">Send Invites to Selected</button>
+    </div>
 
-  if (session.status !== 'open') {
-    submitBtn.disabled = true;
-    statusEl.textContent = 'This session has already been submitted.';
-  }
-}
+    <script id="candidate-template" type="text/x-handlebars-template">
+      {{#each candidates}}
+      <tr>
+        <td><input type="checkbox" class="cand-checkbox" data-id="{{this._id}}" {{#if this.selected}}checked{{/if}}></td>
+        <td>{{this.name}}</td>
+        <td>{{this.email}}</td>
+        <td>{{this.major}}</td>
+        <td>{{this.university}}</td>
+        <td>{{#if this.linkedin}}<a href="{{this.linkedin}}" target="_blank">profile</a>{{/if}}</td>
+        <td>{{#if this.cv}}<a href="{{this.cv}}" target="_blank">view</a>{{/if}}</td>
+      </tr>
+      {{else}}
+      <tr><td colspan="7">No candidates in this session.</td></tr>
+      {{/each}}
+    </script>
 
-submitBtn.addEventListener('click', async () => {
-  submitBtn.disabled = true;
-  const res = await fetch(`/session/${token}/submit`, { method: 'POST' });
-  const data = await res.json();
-  if (res.ok) {
-    statusEl.textContent = `Invites sent to ${data.verification_tokens.length} candidate(s).`;
-  } else {
-    statusEl.textContent = data.detail || 'Something went wrong.';
-    submitBtn.disabled = false;
-  }
-});
+    <script>
+      const token = window.location.pathname.split("/").filter(Boolean)[1];
+      const template = Handlebars.compile(
+        document.getElementById("candidate-template").innerHTML,
+      );
+      const statusEl = document.getElementById("status");
+      const submitBtn = document.getElementById("submit-btn");
 
-loadSession();
-</script>
-</body>
+      async function loadSession() {
+        const res = await fetch(`/session/${token}`);
+        const session = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = session.detail || "Session not found.";
+          document.getElementById("candidate-list").innerHTML = "";
+          submitBtn.disabled = true;
+          return;
+        }
+
+        document.getElementById("startup-name").textContent = session.startup;
+        const selectedSet = new Set(session.selected_ids);
+        const candidates = session.candidates.map((c) => ({
+          ...c,
+          selected: selectedSet.has(c._id),
+        }));
+        document.getElementById("candidate-list").innerHTML = template({
+          candidates,
+        });
+
+        document.querySelectorAll(".cand-checkbox").forEach((cb) => {
+          cb.addEventListener("change", async (e) => {
+            const id = e.target.dataset.id;
+            const action = e.target.checked ? "select" : "deselect";
+            const r = await fetch(`/session/${token}/${action}/${id}`, {
+              method: "POST",
+            });
+            if (!r.ok) {
+              const err = await r.json();
+              statusEl.textContent =
+                err.detail || "Could not update selection.";
+              e.target.checked = !e.target.checked;
+            }
+          });
+        });
+
+        if (session.status !== "open") {
+          submitBtn.disabled = true;
+          statusEl.textContent = "This session has already been submitted.";
+        }
+      }
+
+      submitBtn.addEventListener("click", async () => {
+        submitBtn.disabled = true;
+        const res = await fetch(`/session/${token}/submit`, { method: "POST" });
+        const data = await res.json();
+        if (res.ok) {
+          statusEl.textContent = `Invites sent to ${data.verification_tokens.length} candidate(s).`;
+        } else {
+          statusEl.textContent = data.detail || "Something went wrong.";
+          submitBtn.disabled = false;
+        }
+      });
+
+      loadSession();
+    </script>
+  </body>
 </html>

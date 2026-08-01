@@ -1,0 +1,429 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Admin Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/handlebars@4.7.8/dist/handlebars.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --card: #ffffff;
+        --text: #172033;
+        --muted: #6b7280;
+        --border: #e5e7eb;
+        --accent: #2563eb;
+        --accent-soft: #eff6ff;
+        --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: Inter, "Segoe UI", system-ui, sans-serif;
+        margin: 0;
+        padding: 2rem 1rem 3rem;
+        background: linear-gradient(135deg, #f8fbff 0%, var(--bg) 100%);
+        color: var(--text);
+      }
+      .container {
+        max-width: 1050px;
+        margin: 0 auto;
+      }
+      .hero {
+        background: linear-gradient(120deg, #1d4ed8 0%, #3b82f6 100%);
+        color: white;
+        border-radius: 24px;
+        padding: 1.5rem 1.6rem;
+        box-shadow: var(--shadow);
+        margin-bottom: 1.2rem;
+      }
+      .hero h1 {
+        margin: 0 0 0.3rem;
+        font-size: 1.5rem;
+      }
+      .hero p {
+        margin: 0;
+        opacity: 0.95;
+      }
+      .panel {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 1.1rem 1.2rem;
+        box-shadow: var(--shadow);
+        margin-bottom: 1rem;
+      }
+      h2 {
+        font-size: 1.05rem;
+        margin: 0 0 0.8rem;
+      }
+      .summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.8rem;
+      }
+      .stat {
+        background: var(--accent-soft);
+        border: 1px solid #dbeafe;
+        border-radius: 14px;
+        padding: 0.8rem 1rem;
+        min-width: 140px;
+        flex: 1 1 140px;
+      }
+      .stat .n {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--accent);
+      }
+      .stat .label {
+        font-size: 0.82rem;
+        color: var(--muted);
+        margin-top: 0.2rem;
+      }
+      input#search {
+        padding: 0.7rem 0.8rem;
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        margin-bottom: 0.75rem;
+        font-size: 0.95rem;
+        background: #fcfdff;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 0.25rem 0 0;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 0.7rem 0.7rem;
+        border-bottom: 1px solid var(--border);
+        font-size: 0.92rem;
+      }
+      th {
+        color: var(--muted);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        font-size: 0.75rem;
+      }
+      tr.cand-row {
+        cursor: pointer;
+        transition: background 0.2s ease;
+      }
+      tr.cand-row:hover {
+        background: #f9fafb;
+      }
+      #detail,
+      #startup-detail {
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 1rem;
+        margin-top: 1rem;
+        display: none;
+        background: #fcfdff;
+      }
+      #status {
+        color: var(--muted);
+        margin-bottom: 0.5rem;
+      }
+      a {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="hero">
+        <h1>Admin Dashboard</h1>
+        <p>
+          Monitor shortlisted candidates, startup review sessions, and interview
+          progress in one place.
+        </p>
+      </div>
+
+      <div class="panel">
+        <h2>Overview</h2>
+        <div class="summary" id="summary">Loading…</div>
+      </div>
+
+      <div class="panel">
+        <h2>Candidates</h2>
+        <input
+          id="search"
+          type="search"
+          placeholder="Filter by name, email, or startup…"
+        />
+        <div id="status"></div>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Startup</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="candidate-list">
+            <tr>
+              <td colspan="4">Loading…</td>
+            </tr>
+          </tbody>
+        </table>
+        <div id="detail"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Startups</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Startup</th>
+            </tr>
+          </thead>
+          <tbody id="startup-list">
+            <tr>
+              <td>Loading…</td>
+            </tr>
+          </tbody>
+        </table>
+        <div id="startup-detail"></div>
+      </div>
+    </div>
+
+    <script id="summary-template" type="text/x-handlebars-template">
+      {{#each stats}}
+        <div class="stat"><div class="n">{{this.value}}</div><div
+            class="label"
+          >{{this.label}}</div></div>
+      {{/each}}
+    </script>
+
+    <script id="candidate-rows-template" type="text/x-handlebars-template">
+      {{#each candidates}}
+        <tr class="cand-row" data-id="{{this._id}}">
+          <td>{{this.name}}</td><td>{{this.email}}</td><td
+          >{{this.startup}}</td><td>{{this.status}}</td>
+        </tr>
+      {{else}}
+        <tr><td colspan="4">No candidates yet.</td></tr>
+      {{/each}}
+    </script>
+
+    <script id="detail-template" type="text/x-handlebars-template">
+      <h2>{{candidate.name}}</h2>
+      <table>
+        <tr><th>Email</th><td>{{candidate.email}}</td></tr>
+        <tr><th>Startup</th><td>{{candidate.startup}}</td></tr>
+        <tr><th>Status</th><td>{{candidate.status}}</td></tr>
+        {{#if shortlisted.major}}<tr><th>Major</th><td
+            >{{shortlisted.major}}</td></tr>{{/if}}
+        {{#if shortlisted.university}}<tr><th>University</th><td
+            >{{shortlisted.university}}</td></tr>{{/if}}
+        {{#if shortlisted.linkedin}}<tr><th>LinkedIn</th><td><a
+                href="{{shortlisted.linkedin}}"
+                target="_blank"
+              >{{shortlisted.linkedin}}</a></td></tr>{{/if}}
+        {{#if shortlisted.cv}}<tr><th>CV</th><td><a
+                href="{{shortlisted.cv}}"
+                target="_blank"
+              >view</a></td></tr>{{/if}}
+      </table>
+      <h3>Interviews</h3>
+      <table>
+        <thead><tr><th>Date</th><th>Status</th><th>Outcome</th></tr></thead>
+        <tbody>
+          {{#each interviews}}
+            <tr><td>{{this.date}}</td><td>{{this.status}}</td><td
+              >{{this.outcome}}</td></tr>
+          {{else}}
+            <tr><td colspan="3">No interviews scheduled.</td></tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </script>
+
+    <script id="startup-rows-template" type="text/x-handlebars-template">
+      {{#each startups}}
+        <tr class="cand-row" data-startup="{{this}}"><td>{{this}}</td></tr>
+      {{else}}
+        <tr><td>No startups yet.</td></tr>
+      {{/each}}
+    </script>
+
+    <script id="startup-detail-template" type="text/x-handlebars-template">
+      <h2>{{startup}}</h2>
+      <div class="summary">
+        {{#each stats}}
+          <div class="stat"><div class="n">{{this.value}}</div><div
+              class="label"
+            >{{this.label}}</div></div>
+        {{/each}}
+      </div>
+
+      <h3>Interns / Candidates</h3>
+      <table>
+        <thead><tr><th>Name</th><th>Email</th><th>Status</th></tr></thead>
+        <tbody>
+          {{#each candidates}}
+            <tr><td>{{this.name}}</td><td>{{this.email}}</td><td
+              >{{this.status}}</td></tr>
+          {{else}}
+            <tr><td colspan="3">No candidates yet.</td></tr>
+          {{/each}}
+        </tbody>
+      </table>
+
+      <h3>Interviews</h3>
+      <table>
+        <thead><tr><th>Candidate ID</th><th>Date</th><th>Status</th><th
+            >Outcome</th></tr></thead>
+        <tbody>
+          {{#each interviews}}
+            <tr><td>{{this.candidate_id}}</td><td>{{this.date}}</td><td
+              >{{this.status}}</td><td>{{this.outcome}}</td></tr>
+          {{else}}
+            <tr><td colspan="4">No interviews yet.</td></tr>
+          {{/each}}
+        </tbody>
+      </table>
+
+      <h3>Shortlist</h3>
+      <table>
+        <thead><tr><th>Name</th><th>Email</th><th>Status</th></tr></thead>
+        <tbody>
+          {{#each shortlisted}}
+            <tr><td>{{this.name}}</td><td>{{this.email}}</td><td
+              >{{this.status}}</td></tr>
+          {{else}}
+            <tr><td colspan="3">No shortlisted candidates yet.</td></tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </script>
+
+    <script>
+      const summaryTemplate = Handlebars.compile(
+        document.getElementById("summary-template").innerHTML,
+      );
+      const rowsTemplate = Handlebars.compile(
+        document.getElementById("candidate-rows-template").innerHTML,
+      );
+      const detailTemplate = Handlebars.compile(
+        document.getElementById("detail-template").innerHTML,
+      );
+      const startupRowsTemplate = Handlebars.compile(
+        document.getElementById("startup-rows-template").innerHTML,
+      );
+      const startupDetailTemplate = Handlebars.compile(
+        document.getElementById("startup-detail-template").innerHTML,
+      );
+      const statusEl = document.getElementById("status");
+      const detailEl = document.getElementById("detail");
+      const startupDetailEl = document.getElementById("startup-detail");
+
+      const STAT_LABELS = {
+        shortlisted_total: "Shortlisted",
+        shortlisted_pending: "Shortlisted (pending)",
+        candidates_total: "Candidates",
+        candidates_pending: "Candidates (pending)",
+        candidates_accepted: "Accepted",
+        candidates_rejected: "Rejected",
+        interviews_total: "Interviews",
+        interviews_scheduled: "Interviews (scheduled)",
+        interviews_completed: "Interviews (completed)",
+      };
+
+      let allCandidates = [];
+
+      async function loadSummary() {
+        const res = await fetch("/admin/summary");
+        const data = await res.json();
+        const stats = Object.entries(data).map(([key, value]) => ({
+          label: STAT_LABELS[key] || key,
+          value,
+        }));
+        document.getElementById("summary").innerHTML = summaryTemplate({
+          stats,
+        });
+      }
+
+      function renderCandidates(candidates) {
+        document.getElementById("candidate-list").innerHTML = rowsTemplate({
+          candidates,
+        });
+        document
+          .querySelectorAll("#candidate-list .cand-row")
+          .forEach((row) => {
+            row.addEventListener("click", () => loadDetail(row.dataset.id));
+          });
+      }
+
+      async function loadCandidates() {
+        const res = await fetch("/admin/candidates");
+        allCandidates = await res.json();
+        renderCandidates(allCandidates);
+      }
+
+      async function loadDetail(id) {
+        const res = await fetch(`/admin/candidates/${id}`);
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = data.detail || "Could not load candidate.";
+          return;
+        }
+        detailEl.innerHTML = detailTemplate(data);
+        detailEl.style.display = "block";
+        detailEl.scrollIntoView({ behavior: "smooth" });
+      }
+
+      async function loadStartups() {
+        const res = await fetch("/admin/startups");
+        const startups = await res.json();
+        document.getElementById("startup-list").innerHTML = startupRowsTemplate(
+          { startups },
+        );
+        document.querySelectorAll("#startup-list .cand-row").forEach((row) => {
+          row.addEventListener("click", () =>
+            loadStartupDetail(row.dataset.startup),
+          );
+        });
+      }
+
+      async function loadStartupDetail(startup) {
+        const res = await fetch(
+          `/admin/startups/${encodeURIComponent(startup)}`,
+        );
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = data.detail || "Could not load startup.";
+          return;
+        }
+        const stats = Object.entries(data.counts).map(([key, value]) => ({
+          label: STAT_LABELS[key] || key,
+          value,
+        }));
+        startupDetailEl.innerHTML = startupDetailTemplate({ ...data, stats });
+        startupDetailEl.style.display = "block";
+        startupDetailEl.scrollIntoView({ behavior: "smooth" });
+      }
+
+      document.getElementById("search").addEventListener("input", (e) => {
+        const q = e.target.value.trim().toLowerCase();
+        const filtered = allCandidates.filter(
+          (c) =>
+            (c.name || "").toLowerCase().includes(q) ||
+            (c.email || "").toLowerCase().includes(q) ||
+            (c.startup || "").toLowerCase().includes(q),
+        );
+        renderCandidates(filtered);
+      });
+
+      loadSummary();
+      loadCandidates();
+      loadStartups();
+    </script>
+  </body>
+</html>

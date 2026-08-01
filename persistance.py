@@ -16,6 +16,7 @@ Interviews = None
 Shortlisted = None
 EmailVerification = None
 Sessions = None
+ActionSessions = None
 
 # ==============================================================================
 # Connection
@@ -23,7 +24,7 @@ Sessions = None
 
 def connect_to_mongo():
     """Initialize MongoDB connection and collection references."""
-    global client, Candidates, Interviews, Shortlisted, EmailVerification, Sessions
+    global client, Candidates, Interviews, Shortlisted, EmailVerification, Sessions, ActionSessions
     if client is None:
         client = MongoClient(os.environ['MONGODB_URI'])
         db = client['QSTP']
@@ -32,6 +33,7 @@ def connect_to_mongo():
         Shortlisted = db['Shortlisted']
         EmailVerification = db['Email_Verification']
         Sessions = db['Sessions']
+        ActionSessions = db['Action_Sessions']
     return client
 
 
@@ -239,6 +241,27 @@ def update_shortlisted(shortlisted_id, updates):
     return result.modified_count
 
 
+def claim_shortlisted(shortlisted_id, startup_name, startup_email):
+    """Atomically reserve a shortlisted candidate for one startup."""
+    connect_to_mongo()
+    claimed_at = datetime.utcnow()
+    result = Shortlisted.update_one(
+        {
+            '_id': ObjectId(shortlisted_id),
+            'status': 'pending',
+        },
+        {
+            '$set': {
+                'status': 'claimed',
+                'claimed_by': startup_name,
+                'claimed_by_email': startup_email,
+                'claimed_at': claimed_at,
+            }
+        },
+    )
+    return result.modified_count > 0
+
+
 def update_shortlisted_status(shortlisted_id, status):
     """Change shortlisted status (pending/confirmed/done)."""
     return update_shortlisted(shortlisted_id, {'status': status})
@@ -281,6 +304,18 @@ def get_verification(token):
     return EmailVerification.find_one({'token': token})
 
 
+def get_pending_verifications():
+    """Verifications still awaiting the candidate's reply."""
+    connect_to_mongo()
+    return list(EmailVerification.find({'status': 'pending'}))
+
+
+def remove_resolved_verifications():
+    """Delete verification tokens whose workflow has already finished. Returns deleted count."""
+    connect_to_mongo()
+    return EmailVerification.delete_many({'status': {'$ne': 'pending'}}).deleted_count
+
+
 def update_verification(token, updates):
     """Update a verification record. Returns modified count."""
     connect_to_mongo()
@@ -315,10 +350,68 @@ def get_session(token):
     return Sessions.find_one({'token': token})
 
 
+def get_open_sessions():
+    """Selection sessions the startup hasn't submitted yet."""
+    connect_to_mongo()
+    return list(Sessions.find({'status': 'open'}))
+
+
+def remove_resolved_sessions():
+    """Delete selection sessions whose workflow has already finished. Returns deleted count."""
+    connect_to_mongo()
+    return Sessions.delete_many({'status': {'$ne': 'open'}}).deleted_count
+
+
 def update_session(token, updates):
     """Update a selection session. Returns modified count."""
     connect_to_mongo()
     result = Sessions.update_one({'token': token}, {'$set': updates})
+    return result.modified_count
+
+
+# ==============================================================================
+# Action Sessions – CRUD  (startup decides: interview / instant onboard / reject)
+# ==============================================================================
+
+def create_action_session(candidate_id, startup, startup_email):
+    """Create an open action session for a confirmed candidate. Returns uuid token."""
+    connect_to_mongo()
+    token = str(uuid4())
+    ActionSessions.insert_one({
+        'token':          token,
+        'candidate_id':   str(candidate_id),
+        'startup':        startup,
+        'startup_email':  startup_email,
+        'status':         'open',       # open | interview_scheduled | completed
+        'interview_id':   None,
+        'created_at':     datetime.utcnow(),
+        'completed_at':   None,
+    })
+    return token
+
+
+def get_action_session(token):
+    """Fetch an action session by its uuid token."""
+    connect_to_mongo()
+    return ActionSessions.find_one({'token': token})
+
+
+def get_open_action_sessions():
+    """Action sessions still awaiting a startup decision or interview outcome."""
+    connect_to_mongo()
+    return list(ActionSessions.find({'status': {'$in': ['open', 'interview_scheduled']}}))
+
+
+def remove_completed_action_sessions():
+    """Delete action sessions whose workflow has already finished. Returns deleted count."""
+    connect_to_mongo()
+    return ActionSessions.delete_many({'status': 'completed'}).deleted_count
+
+
+def update_action_session(token, updates):
+    """Update an action session. Returns modified count."""
+    connect_to_mongo()
+    result = ActionSessions.update_one({'token': token}, {'$set': updates})
     return result.modified_count
 
 
@@ -339,12 +432,16 @@ def shortlist_to_candidate(shortlisted_id):
     update_shortlisted_status(shortlisted_id, 'confirmed')
 
     candidate = {
-        'name':         entry.get('name'),
-        'email':        entry.get('email'),
-        'startup':      entry.get('startup'),
-        'shortlist_id': str(entry['_id']),
-        'status':       'pending',
-        'created_at':   datetime.utcnow(),
+        'name':           entry.get('name'),
+        'email':          entry.get('email'),
+        'phone':          entry.get('phone'),
+        'startup':        entry.get('startup'),
+        'startup_email':  entry.get('startup_email') or entry.get('claimed_by_email'),
+        'startup_phone':  entry.get('startup_phone'),
+        'job_title':      entry.get('job_title'),
+        'shortlist_id':   str(entry['_id']),
+        'status':         'pending',
+        'created_at':     datetime.utcnow(),
     }
     return add_candidate(candidate)
 

@@ -1,0 +1,405 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Next Steps — Candidate Action</title>
+    <script src="https://cdn.jsdelivr.net/npm/handlebars@4.7.8/dist/handlebars.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --card: #ffffff;
+        --text: #172033;
+        --muted: #6b7280;
+        --border: #e5e7eb;
+        --accent: #2563eb;
+        --accent-strong: #1d4ed8;
+        --success: #059669;
+        --danger: #dc2626;
+        --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: Inter, "Segoe UI", system-ui, sans-serif;
+        margin: 0;
+        padding: 2rem 1rem 3rem;
+        background: linear-gradient(135deg, #f8fbff 0%, var(--bg) 100%);
+        color: var(--text);
+      }
+      .container {
+        max-width: 640px;
+        margin: 0 auto;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        box-shadow: var(--shadow);
+        padding: 1.4rem;
+      }
+      h1 {
+        font-size: 1.35rem;
+        margin: 0 0 0.4rem;
+      }
+      .subtitle {
+        color: var(--muted);
+        margin-bottom: 1.2rem;
+      }
+      .candidate-card {
+        background: #fcfdff;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 1rem;
+        margin-bottom: 1.2rem;
+      }
+      .candidate-card strong {
+        display: block;
+        font-size: 1.1rem;
+        margin-bottom: 0.3rem;
+      }
+      .candidate-card span {
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+      section {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        background: #fcfdff;
+      }
+      section h2 {
+        font-size: 1rem;
+        margin: 0 0 0.8rem;
+      }
+      label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-size: 0.88rem;
+        color: var(--muted);
+      }
+      input,
+      textarea {
+        width: 100%;
+        padding: 0.6rem 0.75rem;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        font-size: 0.95rem;
+        margin-bottom: 0.7rem;
+      }
+      textarea {
+        min-height: 70px;
+        resize: vertical;
+      }
+      .btn-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        margin-top: 0.5rem;
+      }
+      button {
+        padding: 0.7rem 1.1rem;
+        font-size: 0.95rem;
+        cursor: pointer;
+        border: none;
+        border-radius: 999px;
+        color: white;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+      .btn-primary {
+        background: linear-gradient(120deg, var(--accent) 0%, var(--accent-strong) 100%);
+      }
+      .btn-success {
+        background: linear-gradient(120deg, var(--success) 0%, #047857 100%);
+      }
+      .btn-danger {
+        background: linear-gradient(120deg, var(--danger) 0%, #b91c1c 100%);
+      }
+      .btn-pass {
+        background: linear-gradient(120deg, var(--success) 0%, #047857 100%);
+      }
+      .btn-fail {
+        background: linear-gradient(120deg, var(--danger) 0%, #b91c1c 100%);
+      }
+      #status {
+        margin-top: 1rem;
+        padding: 0.8rem 1rem;
+        border-radius: 10px;
+        background: #eff6ff;
+        color: var(--text);
+        display: none;
+      }
+      #status.error {
+        background: #fef2f2;
+        color: var(--danger);
+      }
+      #status.success {
+        background: #ecfdf5;
+        color: var(--success);
+      }
+      .hidden {
+        display: none !important;
+      }
+      .interview-info {
+        background: #eff6ff;
+        border-radius: 10px;
+        padding: 0.8rem 1rem;
+        margin-bottom: 0.8rem;
+        font-size: 0.92rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Next Steps for <span id="startup-name">...</span></h1>
+      <div class="subtitle">
+        This candidate confirmed their interest. Choose how to proceed.
+      </div>
+
+      <div class="candidate-card"></div>
+
+      <div id="status"></div>
+
+      <!-- Schedule interview -->
+      <section id="schedule-section">
+        <h2>Schedule Interview</h2>
+        <form id="interview-form">
+          <label>Date <input type="date" name="date" required /></label>
+          <label>Time <input type="time" name="time" /></label>
+          <label
+            >Location / Meeting Link
+            <input type="text" name="location" placeholder="Office, Zoom link, etc."
+          /></label>
+          <label
+            >Notes <textarea name="notes" placeholder="Optional instructions for the candidate"></textarea
+          ></label>
+          <div class="btn-row">
+            <button type="submit" class="btn-primary" id="schedule-btn">
+              Schedule &amp; Notify Candidate
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Instant onboard -->
+      <section id="instant-section">
+        <h2>Instant Onboard</h2>
+        <p style="color: var(--muted); font-size: 0.92rem; margin: 0 0 0.8rem">
+          Skip the interview and send the candidate an acceptance offer directly.
+        </p>
+        <div class="btn-row">
+          <button class="btn-success" id="instant-btn">Instant Onboard</button>
+        </div>
+      </section>
+
+      <!-- Decline -->
+      <section id="reject-section">
+        <h2>Decline Candidate</h2>
+        <p style="color: var(--muted); font-size: 0.92rem; margin: 0 0 0.8rem">
+          The candidate will receive a polite rejection email.
+        </p>
+        <div class="btn-row">
+          <button class="btn-danger" id="reject-btn">Decline Candidate</button>
+        </div>
+      </section>
+
+      <!-- Interview outcome (shown after interview scheduled) -->
+      <section id="outcome-section" class="hidden">
+        <h2>Interview Outcome</h2>
+        <div class="interview-info" id="interview-info"></div>
+        <p style="color: var(--muted); font-size: 0.92rem; margin: 0 0 0.8rem">
+          After the interview, record the result below. The candidate will be notified
+          automatically.
+        </p>
+        <div class="btn-row">
+          <button class="btn-pass" id="pass-btn">Accepted — Send Offer</button>
+          <button class="btn-fail" id="fail-btn">Rejected — Send Follow-up</button>
+        </div>
+      </section>
+    </div>
+
+    <script id="candidate-template" type="text/x-handlebars-template">
+      <strong>{{candidate.name}}</strong>
+      <span>{{#if candidate.email}}{{candidate.email}} &middot; {{/if}}</span>
+      <span>{{#if candidate.job_title}}{{candidate.job_title}}{{else}}Intern{{/if}}</span>
+    </script>
+
+    <script id="status-template" type="text/x-handlebars-template">
+      {{#if_eq status "completed"}}
+        This action has been completed.
+      {{/if_eq}}
+      {{#if_eq status "interview_scheduled"}}
+        Interview scheduled. The candidate has been notified by email.
+      {{/if_eq}}
+    </script>
+
+    <script id="interview-info-template" type="text/x-handlebars-template">
+      <strong>Interview scheduled</strong><br>
+      Date: {{#if interview.date}}{{interview.date}}{{else}}&mdash;{{/if}}<br>
+      {{#if interview.time}}Time: {{interview.time}}<br>{{/if}}
+      {{#if interview.location}}Location: {{interview.location}}<br>{{/if}}
+      {{#if interview.notes}}Notes: {{interview.notes}}{{/if}}
+    </script>
+
+    <script>
+      Handlebars.registerHelper("if_eq", function (a, b, opts) {
+        return a === b ? opts.fn(this) : opts.inverse(this);
+      });
+
+      const candidateTemplate = Handlebars.compile(
+        document.getElementById("candidate-template").innerHTML,
+      );
+      const statusTemplate = Handlebars.compile(
+        document.getElementById("status-template").innerHTML,
+      );
+      const interviewInfoTemplate = Handlebars.compile(
+        document.getElementById("interview-info-template").innerHTML,
+      );
+
+      const token = window.location.pathname.split("/").filter(Boolean)[1];
+      const statusEl = document.getElementById("status");
+
+      function showStatus(msg, type) {
+        statusEl.textContent = msg;
+        statusEl.className = type || "";
+        statusEl.style.display = "block";
+      }
+
+      function disableAll() {
+        document
+          .querySelectorAll("button, input, textarea")
+          .forEach((el) => (el.disabled = true));
+      }
+
+      function renderSession(data) {
+        document.getElementById("startup-name").textContent = data.startup || "";
+        document.querySelector(".candidate-card").innerHTML = candidateTemplate(data);
+
+        const statusMsg = statusTemplate(data).trim();
+
+        if (data.status === "completed") {
+          disableAll();
+          if (statusMsg) showStatus(statusMsg, "success");
+          document.getElementById("schedule-section").classList.add("hidden");
+          document.getElementById("instant-section").classList.add("hidden");
+          document.getElementById("reject-section").classList.add("hidden");
+          document.getElementById("outcome-section").classList.add("hidden");
+          return;
+        }
+
+        if (data.status === "interview_scheduled") {
+          document.getElementById("schedule-section").classList.add("hidden");
+          document.getElementById("instant-section").classList.add("hidden");
+          document.getElementById("reject-section").classList.add("hidden");
+          document.getElementById("outcome-section").classList.remove("hidden");
+
+          document.getElementById("interview-info").innerHTML = interviewInfoTemplate(data);
+          if (statusMsg) showStatus(statusMsg, "success");
+        }
+      }
+
+      async function loadSession() {
+        const res = await fetch(`/action/${token}`);
+        const data = await res.json();
+        if (!res.ok) {
+          showStatus(data.detail || "Session not found.", "error");
+          disableAll();
+          return;
+        }
+        renderSession(data);
+      }
+
+      document.getElementById("interview-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const body = {
+          date: fd.get("date"),
+          time: fd.get("time") || null,
+          location: fd.get("location") || null,
+          notes: fd.get("notes") || null,
+        };
+        document.getElementById("schedule-btn").disabled = true;
+        const res = await fetch(`/action/${token}/interview`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          await loadSession();
+        } else {
+          showStatus(data.detail || "Could not schedule interview.", "error");
+          document.getElementById("schedule-btn").disabled = false;
+        }
+      });
+
+      document.getElementById("instant-btn").addEventListener("click", async () => {
+        if (!confirm("Instantly onboard this candidate without an interview?")) return;
+        document.getElementById("instant-btn").disabled = true;
+        const res = await fetch(`/action/${token}/instant-onboard`, { method: "POST" });
+        const data = await res.json();
+        if (res.ok) {
+          disableAll();
+          showStatus("Candidate onboarded. Acceptance email sent.", "success");
+        } else {
+          showStatus(data.detail || "Could not onboard.", "error");
+          document.getElementById("instant-btn").disabled = false;
+        }
+      });
+
+      document.getElementById("reject-btn").addEventListener("click", async () => {
+        if (!confirm("Decline this candidate? They will receive a rejection email."))
+          return;
+        document.getElementById("reject-btn").disabled = true;
+        const res = await fetch(`/action/${token}/reject`, { method: "POST" });
+        const data = await res.json();
+        if (res.ok) {
+          disableAll();
+          showStatus("Candidate declined. Rejection email sent.", "success");
+        } else {
+          showStatus(data.detail || "Could not decline.", "error");
+          document.getElementById("reject-btn").disabled = false;
+        }
+      });
+
+      document.getElementById("pass-btn").addEventListener("click", async () => {
+        document.getElementById("pass-btn").disabled = true;
+        const res = await fetch(`/action/${token}/outcome`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ outcome: "passed" }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          disableAll();
+          showStatus("Candidate accepted. Offer email sent.", "success");
+        } else {
+          showStatus(data.detail || "Could not record outcome.", "error");
+          document.getElementById("pass-btn").disabled = false;
+        }
+      });
+
+      document.getElementById("fail-btn").addEventListener("click", async () => {
+        document.getElementById("fail-btn").disabled = true;
+        const res = await fetch(`/action/${token}/outcome`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ outcome: "failed" }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          disableAll();
+          showStatus("Candidate rejected. Follow-up email sent.", "success");
+        } else {
+          showStatus(data.detail || "Could not record outcome.", "error");
+          document.getElementById("fail-btn").disabled = false;
+        }
+      });
+
+      loadSession();
+    </script>
+  </body>
+</html>
