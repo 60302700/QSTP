@@ -1,6 +1,9 @@
 venv
 .venv
 .claude
+.agent
 __pycache__
+*.pyc
 .env
-
+.env.*
+!.env.example
