@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 from datetime import datetime
+from uuid import uuid4
+
+load_dotenv(Path(__file__).resolve().parent / '.env')
 
 client = None
 Candidates = None
 Interviews = None
 Shortlisted = None
+EmailVerification = None
+Sessions = None
 
 # ==============================================================================
 # Connection
@@ -14,15 +23,15 @@ Shortlisted = None
 
 def connect_to_mongo():
     """Initialize MongoDB connection and collection references."""
-    global client, Candidates, Interviews, Shortlisted
+    global client, Candidates, Interviews, Shortlisted, EmailVerification, Sessions
     if client is None:
-        client = MongoClient(
-            'mongodb+srv://abdullah123bin_db_user:wNH8rIzb034KqXxN@cluster0.g2cako5.mongodb.net/'
-        )
+        client = MongoClient(os.environ['MONGODB_URI'])
         db = client['QSTP']
         Candidates = db['Candidates']
         Interviews = db['Interviews']
         Shortlisted = db['Shortlisted']
+        EmailVerification = db['Email_Verification']
+        Sessions = db['Sessions']
     return client
 
 
@@ -246,6 +255,71 @@ def count_shortlisted(filters=None):
     """Count shortlisted entries matching optional filters."""
     connect_to_mongo()
     return Shortlisted.count_documents(filters or {})
+
+
+# ==============================================================================
+# Email Verification – CRUD  (uuid-token tracked, one per shortlisted entry)
+# ==============================================================================
+
+def create_verification(shortlisted_id):
+    """Create a pending verification record for a shortlisted entry. Returns its uuid token."""
+    connect_to_mongo()
+    token = str(uuid4())
+    EmailVerification.insert_one({
+        'token':         token,
+        'shortlisted_id': str(shortlisted_id),
+        'status':        'pending',      # pending | employed | accepted | declined
+        'created_at':    datetime.utcnow(),
+        'responded_at':  None,
+    })
+    return token
+
+
+def get_verification(token):
+    """Fetch a verification record by its uuid token."""
+    connect_to_mongo()
+    return EmailVerification.find_one({'token': token})
+
+
+def update_verification(token, updates):
+    """Update a verification record. Returns modified count."""
+    connect_to_mongo()
+    result = EmailVerification.update_one({'token': token}, {'$set': updates})
+    return result.modified_count
+
+
+# ==============================================================================
+# Sessions – CRUD  (startup select/unselect from their shortlist)
+# ==============================================================================
+
+def create_session(startup, shortlisted_ids, startup_email):
+    """Create an open selection session for a startup. Returns its uuid token."""
+    connect_to_mongo()
+    token = str(uuid4())
+    Sessions.insert_one({
+        'token':           token,
+        'startup':         startup,
+        'startup_email':   startup_email,
+        'shortlisted_ids': [str(i) for i in shortlisted_ids],
+        'selected_ids':    [],
+        'status':          'open',       # open | submitted
+        'created_at':      datetime.utcnow(),
+        'submitted_at':    None,
+    })
+    return token
+
+
+def get_session(token):
+    """Fetch a selection session by its uuid token."""
+    connect_to_mongo()
+    return Sessions.find_one({'token': token})
+
+
+def update_session(token, updates):
+    """Update a selection session. Returns modified count."""
+    connect_to_mongo()
+    result = Sessions.update_one({'token': token}, {'$set': updates})
+    return result.modified_count
 
 
 # ==============================================================================

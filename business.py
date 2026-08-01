@@ -1,5 +1,16 @@
+import os
 import re
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from dotenv import load_dotenv
+
 import persistance
+import resend_mail
+
+load_dotenv(Path(__file__).resolve().parent / '.env')
+
+BASE_URL = os.environ.get('BASE_URL', 'http://127.0.0.1:8000')
 
 # ==============================================================================
 # Custom Exceptions
@@ -25,7 +36,9 @@ class DuplicateError(Exception):
 VALID_CANDIDATE_STATUSES   = {'pending', 'accepted', 'rejected'}
 VALID_INTERVIEW_STATUSES   = {'scheduled', 'completed', 'cancelled'}
 VALID_INTERVIEW_OUTCOMES   = {'passed', 'failed', 'pending'}
-VALID_SHORTLISTED_STATUSES = {'pending', 'confirmed', 'declined'}
+VALID_SHORTLISTED_STATUSES = {'pending', 'invited', 'confirmed', 'declined', 'disabled'}
+
+DISABLE_CYCLE_DAYS = 90  # ~3 months cooldown after "already employed"
 
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
@@ -48,6 +61,31 @@ def _validate_status(status: str, allowed: set, label: str):
 def _validate_id(id_value, label: str):
     if not id_value or not str(id_value).strip():
         raise ValidationError(f"[{label}] ID must not be empty.")
+
+
+def _send_email(to: str, subject: str, html: str):
+    """Send an email via Resend (resend_mail.py already wires up the API key)."""
+    resend_mail.send_email(to, subject, html)
+
+
+def _email_acceptance(candidate: dict):
+    _send_email(
+        candidate['email'],
+        f"You're in! Offer from {candidate.get('startup', '')}",
+        f"<p>Hi {candidate.get('name', '')},</p>"
+        f"<p>Congratulations — you've been accepted for the position at {candidate.get('startup', '')}.</p>"
+        f"<p>Your contract and onboarding details will follow shortly.</p>",
+    )
+
+
+def _email_rejection(candidate: dict):
+    _send_email(
+        candidate['email'],
+        f"Update on your application to {candidate.get('startup', '')}",
+        f"<p>Hi {candidate.get('name', '')},</p>"
+        f"<p>Thank you for your time — we've decided not to move forward at this stage.</p>"
+        f"<p>We wish you the best in your search.</p>",
+    )
 
 
 # ==============================================================================
@@ -410,7 +448,7 @@ def schedule_interview_for_candidate(candidate_id: str, interview_details: dict)
 def accept_candidate(candidate_id: str):
     """
     Accept a candidate after passing the pipeline.
-    Must be in 'pending' status.
+    Must be in 'pending' status. Emails them the offer + contract follow-up.
     """
     _validate_id(candidate_id, 'Candidate')
     candidate = get_candidate(candidate_id)
@@ -418,13 +456,15 @@ def accept_candidate(candidate_id: str):
         raise ValidationError(f"Candidate '{candidate_id}' is already accepted.")
     if candidate.get('status') == 'rejected':
         raise ValidationError(f"Candidate '{candidate_id}' was rejected and cannot be accepted.")
-    return persistance.accept_candidate(candidate_id)
+    result = persistance.accept_candidate(candidate_id)
+    _email_acceptance(candidate)
+    return result
 
 
 def reject_candidate(candidate_id: str):
     """
     Reject a candidate.
-    Must not already be accepted or rejected.
+    Must not already be accepted or rejected. Emails them a rejection follow-up.
     """
     _validate_id(candidate_id, 'Candidate')
     candidate = get_candidate(candidate_id)
@@ -432,13 +472,15 @@ def reject_candidate(candidate_id: str):
         raise ValidationError(f"Candidate '{candidate_id}' is already rejected.")
     if candidate.get('status') == 'accepted':
         raise ValidationError(f"Candidate '{candidate_id}' is already accepted and cannot be rejected.")
-    return persistance.reject_candidate(candidate_id)
+    result = persistance.reject_candidate(candidate_id)
+    _email_rejection(candidate)
+    return result
 
 
 def instant_onboard_candidate(candidate_id: str):
     """
     Instantly onboard a candidate (skip interview path).
-    Only valid for 'pending' candidates.
+    Only valid for 'pending' candidates. Emails them the offer + contract follow-up.
     """
     _validate_id(candidate_id, 'Candidate')
     candidate = get_candidate(candidate_id)
@@ -447,9 +489,149 @@ def instant_onboard_candidate(candidate_id: str):
             f"Instant onboarding only applies to pending candidates. "
             f"Current status: '{candidate.get('status')}'."
         )
-    return persistance.instant_onboard_candidate(candidate_id)
+    result = persistance.instant_onboard_candidate(candidate_id)
+    _email_acceptance(candidate)
+    return result
 
 
 def get_pipeline_summary():
     """Return a count summary across all pipeline stages."""
     return persistance.get_pipeline_summary()
+
+
+# ==============================================================================
+# Email Verification – Business Layer
+# ==============================================================================
+
+def invite_for_verification(shortlisted_id: str):
+    """
+    Email a shortlisted entry asking (1) are they already employed elsewhere,
+    (2) are they down for the position. Returns the verification token.
+    """
+    entry = get_shortlisted(shortlisted_id)     # raises NotFoundError if missing
+
+    if entry.get('status') == 'disabled':
+        until = entry.get('disabled_until')
+        if until and until > datetime.utcnow():
+            raise ValidationError(
+                f"Shortlisted entry '{shortlisted_id}' is on cooldown until {until.isoformat()}."
+            )
+    elif entry.get('status') in ('confirmed', 'declined'):
+        raise ValidationError(
+            f"Shortlisted entry '{shortlisted_id}' has already been processed (status: '{entry['status']}')."
+        )
+
+    token = persistance.create_verification(shortlisted_id)
+    persistance.update_shortlisted(shortlisted_id, {'status': 'invited'})
+
+    _send_email(
+        entry['email'],
+        "Are you still available for this position?",
+        f"<p>Hi {entry.get('name', '')},</p>"
+        f"<p>Please confirm your interest for the {entry.get('startup', '')} position:</p>"
+        f'<p><a href="{BASE_URL}/verify/{token}">{BASE_URL}/verify/{token}</a></p>',
+    )
+    return token
+
+
+def submit_verification(token: str, already_employed: bool, down_for_position: bool):
+    """
+    Record a candidate's reply to a verification email.
+
+    - already_employed=True  -> disabled for a 3-month cooldown, nothing further happens.
+    - already_employed=False and down_for_position=True  -> promoted to Candidates.
+    - already_employed=False and down_for_position=False -> declined.
+    """
+    verification = persistance.get_verification(token)
+    if not verification:
+        raise NotFoundError(f"Verification '{token}' not found.")
+    if verification['status'] != 'pending':
+        raise ValidationError(f"Verification '{token}' has already been used.")
+
+    shortlisted_id = verification['shortlisted_id']
+
+    if already_employed:
+        until = datetime.utcnow() + timedelta(days=DISABLE_CYCLE_DAYS)
+        persistance.update_shortlisted(shortlisted_id, {'status': 'disabled', 'disabled_until': until})
+        persistance.update_verification(token, {'status': 'employed', 'responded_at': datetime.utcnow()})
+        return {'result': 'disabled', 'disabled_until': until}
+
+    if down_for_position:
+        persistance.update_verification(token, {'status': 'accepted', 'responded_at': datetime.utcnow()})
+        candidate_id = shortlist_to_candidate(shortlisted_id)
+        return {'result': 'accepted', 'candidate_id': candidate_id}
+
+    persistance.update_verification(token, {'status': 'declined', 'responded_at': datetime.utcnow()})
+    update_shortlisted_status(shortlisted_id, 'declined')
+    return {'result': 'declined'}
+
+
+# ==============================================================================
+# Startup Selection Sessions – Business Layer
+# ==============================================================================
+
+def create_selection_session(startup: str, startup_email: str):
+    """
+    Start a session letting a startup pick which of their pending shortlisted
+    candidates to invite. Emails the startup a link. Returns the session token.
+    """
+    if not startup or not startup.strip():
+        raise ValidationError("Startup name must not be empty.")
+    startup = startup.strip()
+    _validate_email(startup_email)
+    startup_email = startup_email.strip().lower()
+
+    candidates = [c for c in persistance.get_shortlisted_by_startup(startup) if c.get('status') == 'pending']
+    if not candidates:
+        raise ValidationError(f"No pending shortlisted candidates for startup '{startup}'.")
+
+    token = persistance.create_session(startup, [str(c['_id']) for c in candidates], startup_email)
+    _send_email(
+        startup_email,
+        "Review your shortlist",
+        f"<p>Select who to invite from your shortlist:</p>"
+        f'<p><a href="{BASE_URL}/session/{token}/page">{BASE_URL}/session/{token}/page</a></p>',
+    )
+    return token
+
+
+def get_selection_session(token: str):
+    """Fetch a selection session with its candidate details attached."""
+    session = persistance.get_session(token)
+    if not session:
+        raise NotFoundError(f"Session '{token}' not found.")
+    session['candidates'] = [persistance.get_shortlisted(i) for i in session['shortlisted_ids']]
+    return session
+
+
+def set_selection(token: str, shortlisted_id: str, selected: bool):
+    """Select or unselect a candidate within an open session."""
+    session = persistance.get_session(token)
+    if not session:
+        raise NotFoundError(f"Session '{token}' not found.")
+    if session['status'] != 'open':
+        raise ValidationError(f"Session '{token}' is no longer open.")
+    if shortlisted_id not in session['shortlisted_ids']:
+        raise ValidationError(f"'{shortlisted_id}' is not part of this session.")
+
+    selected_ids = set(session.get('selected_ids', []))
+    selected_ids.add(shortlisted_id) if selected else selected_ids.discard(shortlisted_id)
+
+    persistance.update_session(token, {'selected_ids': list(selected_ids)})
+    return list(selected_ids)
+
+
+def submit_selection_session(token: str):
+    """Finalize a session: send verification invites to every selected candidate."""
+    session = persistance.get_session(token)
+    if not session:
+        raise NotFoundError(f"Session '{token}' not found.")
+    if session['status'] != 'open':
+        raise ValidationError(f"Session '{token}' has already been submitted.")
+
+    selected_ids = session.get('selected_ids', [])
+    if not selected_ids:
+        raise ValidationError("No candidates selected in this session.")
+
+    persistance.update_session(token, {'status': 'submitted', 'submitted_at': datetime.utcnow()})
+    return [invite_for_verification(sid) for sid in selected_ids]
